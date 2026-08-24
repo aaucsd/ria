@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lens model — RIA</title>
+<link rel="stylesheet" href="style.css"></head><body>
+
+<header class="sub"><div class="wrap">
+  <nav class="crumb"><a href="../manual.html">← manual</a></nav>
+  <div class="tag">Reference</div>
+  <h1>How the lenses are defined</h1>
+  <p class="lede">Every optical quantity RIA uses, where it comes from,
+  and how to describe your own array.</p>
+</div></header>
+
+<div class="wrap">
+
+<h2>A lens is a plain record</h2>
+<p>A lens is described by three numbers, and an array is a list of such
+records:</p>
+<pre><code>{<span class="s">"position"</span>: (x, y),   <span class="c"># lens centre on the lens plane, mm</span>
+ <span class="s">"f"</span>: <span class="n">9.0</span>,             <span class="c"># focal length, mm</span>
+ <span class="s">"aperture"</span>: <span class="n">1.5</span>}      <span class="c"># lens radius, mm</span></code></pre>
+<p>The list goes to <code>addLens</code> together with the one array-wide
+optical parameter, the residual blur floor σ₀ that every blob carries
+regardless of focus (diffraction, finite optics, sensor response):</p>
+<pre><code>system.<span class="f">addLens</span>(lenses=[{<span class="s">"position"</span>: (<span class="n">0.0</span>, <span class="n">0.0</span>), <span class="s">"f"</span>: <span class="n">9.0</span>, <span class="s">"aperture"</span>: <span class="n">1.5</span>},    <span class="c"># one record per lens</span>
+                       {<span class="s">"position"</span>: (<span class="n">3.6</span>, <span class="n">0.0</span>), <span class="s">"f"</span>: <span class="n">12.0</span>, <span class="s">"aperture"</span>: <span class="n">1.5</span>}],  <span class="c"># centre mm, f mm, radius mm</span>
+               blur_floor=<span class="n">0.12</span>)                                                <span class="c"># array-wide sigma_0, mm</span></code></pre>
+<p>A helper generates the hex-packed positions the examples use; it returns
+positions only, so focal lengths and apertures stay explicit in your code:</p>
+<pre><code>ria.<span class="f">hex_layout</span>(rings=<span class="n">3</span>, pitch=<span class="n">3.6</span>)   <span class="c"># hex-packed centres: 1 ring → 7 lenses,</span>
+                                     <span class="c"># 2 → 19, 3 → 37</span></code></pre>
+
+<h2>Reference instrument values</h2>
+<p>The examples use a reference instrument. These are
+ordinary arguments — nothing is assumed if you pass your own values.</p>
+<table>
+  <tr><th>symbol</th><th class="num">value</th><th>meaning</th></tr>
+  <tr><td>S*</td><td class="num">20.477 mm</td>
+      <td>imaging distance: lens plane → sensor</td></tr>
+  <tr><td>—</td><td class="num">46.15 × 32.84 mm</td>
+      <td>sensor active area</td></tr>
+  <tr><td>a</td><td class="num">1.5 mm</td>
+      <td>lens radius (the <code>aperture</code> field)</td></tr>
+  <tr><td>σ₀</td><td class="num">0.12 mm</td>
+      <td>residual blur floor (the <code>blur_floor</code> argument)</td></tr>
+  <tr><td>f range</td><td class="num">3 – 16 mm</td>
+      <td>manufacturable focal lengths (design side)</td></tr>
+  <tr><td>—</td><td class="num">3.5 mm</td>
+      <td>minimum centre-to-centre lens spacing (design side)</td></tr>
+  <tr><td>N<sub>γ</sub></td><td class="num">~100</td>
+      <td>detected photons in the operating regime</td></tr>
+</table>
+
+<h2>Where a lens puts its blob — the chief ray</h2>
+<p>Let <code>u</code> be the distance from the source to the lens plane. On
+the imaging side this is <code>u = working_distance + z</code>, because the
+scintillator's <code>z</code> is measured from its front face. The chief ray
+through lens <code>i</code> crosses the sensor at</p>
+<pre><code>centre_i = lens_i + (S*/u) * (source_xy - lens_i)   <span class="c"># chief ray: blob centre on the sensor</span></code></pre>
+<p>Depth enters only through the magnification <code>S*/u</code>. That single
+factor is what lets a flat array measure depth: different depths shift the
+blobs by different amounts, and the pattern of shifts is what the inversion
+reads.</p>
+
+<h2>How big the blob is — defocus</h2>
+<p>With the thin-lens image distance <code>d_i = f_i·u / (u − f_i)</code>,
+the blur radius is</p>
+<pre><code>sigma_i = (a_i/<span class="n">2</span>) * |S* - d_i| / d_i  +  sigma_0    <span class="c"># defocus blur + the floor, mm</span></code></pre>
+<p>A lens is sharp only where its image distance matches the sensor distance
+(<code>d_i ≈ S*</code>); everywhere else it blurs. A focal length is therefore
+a vote for one depth, and an array whose focal lengths differ covers the depth
+range. With the reference values, a lens with <code>f = 12</code> viewing a
+source 30 mm from the lens plane has σ = 0.138 mm (nearly in focus), while an
+<code>f = 6</code> lens viewing the same source has σ = 1.42 mm.</p>
+
+<h2>From blob to pixel values</h2>
+<p>Each lens contributes a Gaussian blob with the centre and width above,
+weighted by the solid angle it subtends, <code>a_i²/u²</code>. A pixel's
+expected value is the blob density at the pixel centre times the pixel area,
+with the pixel's own second moment <code>w²/12</code> folded into the
+Gaussian variance (<code>w</code> the pixel width). This is a density, not an
+error-function integral over the pixel — deliberately, because the same
+expression is emitted symbolically to the solver, and the solver's operator
+set has <code>exp</code>, <code>sqrt</code> and ratios but no
+<code>erf</code>. Forward simulation and inversion therefore use the
+identical formula, term for term.</p>
+
+<h2>The design-side view of the same array</h2>
+<p>The design functions (Fisher information, CRB, focal-length optimisation)
+take a <code>LensArray</code>, built from the same lens records plus the
+system-wide quantities they need:</p>
+<pre><code>array = ria.<span class="f">LensArray</span>(lenses=LENSES,          <span class="c"># same records as addLens</span>
+                      blur_floor=<span class="n">0.12</span>,        <span class="c"># same sigma_0, mm</span>
+                      imaging_distance=<span class="n">20.477</span>,<span class="c"># lens plane -&gt; sensor, mm (S*)</span>
+                      sensor_size=(<span class="n">46.15</span>, <span class="n">32.84</span>))   <span class="c"># active area, mm</span></code></pre>
+<p>On the design side <code>z</code> is the source's distance from the lens
+plane directly (the design-side convention), and sources are parameterised
+by lateral radius <code>r</code> on the +x axis. The four design functions —
+exactly as example 6 calls them, over a grid of test radii and depths:</p>
+<pre><code>radii  = (<span class="n">5</span>, <span class="n">10</span>, <span class="n">15</span>, <span class="n">20</span>, <span class="n">25</span>)          <span class="c"># source lateral radius r, mm</span>
+depths = <span class="k">tuple</span>(<span class="k">range</span>(<span class="n">10</span>, <span class="n">51</span>, <span class="n">5</span>))      <span class="c"># source depth z, mm</span>
+photons = <span class="n">100</span>                         <span class="c"># N_gamma per event</span>
+
+ria.<span class="f">design_score</span>(array, radii, depths, photons)         <span class="c"># -&gt; mean log CRB over the grid</span>
+    <span class="c"># (lower = better geometric-mean depth precision)</span>
+
+ria.<span class="f">crb_map</span>(array, radii, depths, photons)              <span class="c"># -&gt; (..., ..., M)</span>
+    <span class="c"># M: the per-point log CRB map behind the figures</span>
+
+ria.<span class="f">optimise_focal_lengths</span>(array, radii, depths, photons,   <span class="c"># coordinate-descent sweep</span>
+                           f_range=(<span class="n">3.0</span>, <span class="n">16.0</span>), rounds=<span class="n">4</span>)   <span class="c"># manufacturable f, 4 passes</span>
+    <span class="c"># -&gt; (array, score): the specialist baseline</span>
+
+ria.<span class="f">optimise_focal_lengths_rekin</span>(array, radii, depths, photons,  <span class="c"># the solver design</span>
+                                 f_range=(<span class="n">3.0</span>, <span class="n">16.0</span>), budget=<span class="n">240</span>,  <span class="c"># solve budget, s</span>
+                                 keep_model=<span class="s">"design.rn"</span>)           <span class="c"># keep the emitted model</span>
+    <span class="c"># -&gt; (array, status, obj); objective="minimax" minimises the</span>
+    <span class="c">#    WORST log CRB anywhere — no sweep analogue</span></code></pre>
+<p><code>violations()</code> checks a candidate design and returns an empty
+list when it is feasible, or a description of what is wrong:</p>
+<pre><code>array.<span class="f">violations</span>(min_sep=<span class="n">3.5</span>, f_range=(<span class="n">3.0</span>, <span class="n">16.0</span>))   <span class="c"># check a candidate design</span>
+<span class="c"># []                                        &lt;- feasible</span>
+<span class="c"># ['lens spacing 2.90 mm &lt; 3.5 mm']         &lt;- lenses would overlap</span>
+<span class="c"># ['focal lengths [2.10, 16.00] outside [3.0, 16.0] mm']</span>
+<span class="c"># ['a lens sits outside the mounting area']</span></code></pre>
+<p>The three constraints are pairwise separation, the focal-length range, and
+every lens inside the mounting area.</p>
+
+<div class="note">Model fidelity. This is the paraxial chief-ray
+approximation: each lens is collapsed to a single ray plus a circular
+Gaussian. It is exact on-axis; a real lens draws an ellipse off-axis (coma,
+astigmatism), and the model over-trusts focus at shallow depth. The trade is
+deliberate — everything above is closed form, so it can be differentiated,
+emitted as algebra, and evaluated millions of times inside a design
+optimisation. For final numbers, calibrate against measurement or a ray
+tracer.</div>
+
+<footer><div class="wrap">
+  <a href="../manual.html">Manual home</a>
+  <a href="sensor-image.html">The sensor image →</a>
+</div></footer>
+</div></body></html>

@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building a system — RIA</title>
+<link rel="stylesheet" href="style.css"></head><body>
+
+<header class="sub"><div class="wrap">
+  <nav class="crumb"><a href="../manual.html">← manual</a></nav>
+  <div class="tag">Getting started</div>
+  <h1>Building a system</h1>
+  <p class="lede">Assemble an imager piece by piece, put an interaction in it,
+  and recover that interaction from the picture.</p>
+</div></header>
+
+<div class="wrap">
+
+<h2>The whole workflow</h2>
+<pre><code><span class="k">import</span> ria                                    <span class="c"># the RIA package</span>
+
+FS = (<span class="n">6</span>, <span class="n">7.5</span>, <span class="n">9</span>, <span class="n">10.5</span>, <span class="n">12</span>, <span class="n">13.5</span>, <span class="n">15</span>)          <span class="c"># focal lengths, cycled over the array</span>
+system = ria.<span class="f">imager</span>()                         <span class="c"># an empty imager</span>
+system.<span class="f">addScint</span>(size=(<span class="n">50</span>, <span class="n">50</span>, <span class="n">50</span>),            <span class="c"># scintillator volume (x, y, z), mm</span>
+                working_distance=<span class="n">5.0</span>)         <span class="c"># lens plane -&gt; front face, mm</span>
+system.<span class="f">addLens</span>(lenses=[{<span class="s">"position"</span>: <span class="k">tuple</span>(p), <span class="s">"f"</span>: FS[i % <span class="n">7</span>], <span class="s">"aperture"</span>: <span class="n">1.5</span>}  <span class="c"># 37 records</span>
+                       <span class="k">for</span> i, p <span class="k">in</span> <span class="k">enumerate</span>(ria.<span class="f">hex_layout</span>(rings=<span class="n">3</span>, pitch=<span class="n">3.6</span>))],  <span class="c"># hex centres</span>
+               blur_floor=<span class="n">0.12</span>)               <span class="c"># residual blur every blob carries, mm</span>
+system.<span class="f">addDetector</span>(size=(<span class="n">46.15</span>, <span class="n">32.84</span>),       <span class="c"># sensor active area, mm</span>
+                   pixels=(<span class="n">12</span>, <span class="n">12</span>),           <span class="c"># coarse one-bit binning (example 1)</span>
+                   imaging_distance=<span class="n">20.477</span>,   <span class="c"># lens plane -&gt; sensor, mm</span>
+                   dark_count=<span class="n">1e-9</span>)           <span class="c"># per-pixel background rate</span>
+
+s1    = system.<span class="f">addVertex</span>([<span class="n">2</span>, <span class="n">2</span>, <span class="n">31</span>], photons=<span class="n">77</span>)   <span class="c"># the source: position mm, detected photons</span>
+image = system.<span class="f">forward</span>(s1, seed=<span class="n">1</span>)                 <span class="c"># simulate a measurement</span>
+found = system.<span class="f">invert</span>(image, truth=s1,             <span class="c"># recover it from the image alone</span>
+                      budget=<span class="n">90</span>, stall=<span class="n">5</span>)          <span class="c"># solve &lt;= 90 s, stop after 5 s no gain</span></code></pre>
+<pre><code><span class="f">Inversion</span>(position=(<span class="n">1.290</span>, <span class="n">0.665</span>, <span class="n">9.945</span>)mm, photons=<span class="n">300.0</span>, error=<span class="n">21.</span>109mm, status=local)   <span class="c"># &lt;- what comes back</span></code></pre>
+<p>This is example 1 exactly — including its honest headline: at a coarse
+12×12 binning the 21 mm miss is an information limit of the saturating
+one-bit sensor, not a solver failure (<code>validate()</code> below shows the
+recovered point explains the image better than the truth does; example 2
+re-runs the same source at realistic-scale pitch and lands 0.055 mm from it).
+Every argument above is required; RIA sets no geometry by default. The
+sections below go through each call.</p>
+
+<h2>addScint — the active volume</h2>
+<p><code>size</code> is the overall extent in mm, not a half-width.
+<code>x</code> and <code>y</code> are centred on the optical axis;
+<code>z</code> runs from the face nearest the lenses (<code>z=0</code>) into
+the volume. So <code>size=(30, 30, 40)</code> means
+<code>x,y ∈ [−15, 15]</code> and <code>z ∈ (0, 40]</code>.
+<code>working_distance</code> is the distance from the lens plane to that
+front face, mm.</p>
+<pre><code>system.<span class="f">addScint</span>(size=(<span class="n">30</span>, <span class="n">30</span>, <span class="n">40</span>), working_distance=<span class="n">5.0</span>)   <span class="c"># extent mm; lens plane -&gt; face mm</span>
+system.scint.bounds                  <span class="c"># the per-axis [min, max] the solver searches</span>
+system.scint.<span class="f">contains</span>([<span class="n">2</span>, <span class="n">2</span>, <span class="n">20</span>])    <span class="c"># True — inside the declared volume</span></code></pre>
+<p><code>addVertex</code> refuses a position outside these bounds.</p>
+
+<h2>addLens — the optics</h2>
+<p>The lens array is a plain list of records, one per lens. Each record gives
+the lens centre on the lens plane, its focal length, and its aperture radius
+(the symbol <code>a_lens</code>), all in mm:</p>
+<pre><code>system.<span class="f">addLens</span>(lenses=[{<span class="s">"position"</span>: (<span class="n">0.0</span>, <span class="n">0.0</span>),  <span class="s">"f"</span>: <span class="n">6.0</span>, <span class="s">"aperture"</span>: <span class="n">1.5</span>},   <span class="c"># one record per lens</span>
+                       {<span class="s">"position"</span>: (<span class="n">3.6</span>, <span class="n">0.0</span>),  <span class="s">"f"</span>: <span class="n">7.5</span>, <span class="s">"aperture"</span>: <span class="n">1.5</span>},   <span class="c"># centre mm, f mm, radius mm</span>
+                       ...],                                                    <span class="c"># ...37 in the examples</span>
+               blur_floor=<span class="n">0.12</span>)      <span class="c"># array-wide residual blur sigma_0, mm</span></code></pre>
+<p><code>blur_floor</code> is σ₀: residual blur every blob
+carries regardless of focus (diffraction, finite optics, sensor response).
+A helper generates the hex-packed position array the examples use; the
+records stay explicit either way:</p>
+<pre><code>pts = ria.<span class="f">hex_layout</span>(rings=<span class="n">3</span>, pitch=<span class="n">3.6</span>)   <span class="c"># hex-packed centres:</span>
+                                           <span class="c"># 1 ring → 7, 2 → 19, 3 → 37</span></code></pre>
+
+<h2>addDetector — the sensor</h2>
+<pre><code>system.<span class="f">addDetector</span>(size=(<span class="n">46.15</span>, <span class="n">32.84</span>),  <span class="c"># active area (width, height), mm</span>
+                   pixels=(<span class="n">24</span>, <span class="n">24</span>),      <span class="c"># one-bit pixels across that area</span>
+                   imaging_distance=<span class="n">20.477</span>,  <span class="c"># lens plane → sensor, mm (S*)</span>
+                   dark_count=<span class="n">1e-9</span>)      <span class="c"># per-pixel background rate ε</span></code></pre>
+<p><code>imaging_distance</code> is S*, the lens-plane → sensor distance. Depth enters the image
+only through the magnification S*/u, which is how a flat array measures z.
+Finer binning carries more information and costs solve time roughly in
+proportion to the pixel count; see <a href="sensor-image.html">the sensor
+image</a> for the saturation trade, and <code>sparse=True</code> below for
+fine-pitch sensors.</p>
+
+<h2>addVertex — an interaction</h2>
+<pre><code>s1 = system.<span class="f">addVertex</span>([<span class="n">2</span>, <span class="n">2</span>, <span class="n">31</span>], photons=<span class="n">77</span>)   <span class="c"># position (x, y, z) mm; detected photons</span></code></pre>
+<p><code>photons</code> is the detected count α — the number of photons that
+reach the sensor, not the isotropic emission of the flash. Add several
+vertices and their light superposes in <code>forward()</code> (see
+"Several vertices in one image" below).</p>
+
+<h2>visibility — is this point measurable?</h2>
+<p>The argument is a source position <code>(x, y, z)</code> in mm — the same
+coordinates <code>addVertex</code> takes; the return is how many lenses land
+that point's blob on the sensor. A lens array has a depth-dependent
+acceptance: points too shallow or too far off-axis are imaged by no lens at
+all, and no photon budget changes that. With the 37-lens array built
+above:</p>
+<pre><code>system.<span class="f">visibility</span>([<span class="n">2</span>, <span class="n">2</span>, <span class="n">31</span>])       <span class="c"># 37 → every lens images s1</span>
+system.<span class="f">visibility</span>([-<span class="n">24</span>, -<span class="n">24</span>, <span class="n">0.2</span>])  <span class="c"># 0  → a shallow corner no lens reaches</span></code></pre>
+<p>On a zero-visibility point <code>forward()</code> raises rather than
+returning a blank image, and its error message points back here. Check
+<code>visibility()</code> per vertex before trusting a multi-source
+separation (see <a href="../README.md">the README</a>).</p>
+
+<h2>forward — simulate the measurement</h2>
+<pre><code>image = system.<span class="f">forward</span>(s1, seed=<span class="n">1</span>)         <span class="c"># one vertex, binary image</span>
+image = system.<span class="f">forward</span>([s1, s2], seed=<span class="n">3</span>)   <span class="c"># several — light adds</span></code></pre>
+<p>The image is binary: one bit per pixel, which is what a single-photon
+sensor returns. Each pixel fires with probability 1 − e<sup>−λ</sup>; the
+draw needs an explicit <code>seed</code> so a measurement is
+reproducible.</p>
+
+<h2>invert — recover the interaction</h2>
+<pre><code>result = system.<span class="f">invert</span>(image, budget=<span class="n">90</span>, stall=<span class="n">5</span>)             <span class="c"># real data</span>
+result = system.<span class="f">invert</span>(image, truth=s1, budget=<span class="n">90</span>, stall=<span class="n">5</span>)   <span class="c"># simulation: adds .error</span>
+result = system.<span class="f">invert</span>(image, budget=<span class="n">90</span>, stall=<span class="n">5</span>,             <span class="c"># keep the emitted model</span>
+                       keep_model=<span class="s">"event.rn"</span>)         <span class="c"># ...written to this path</span>
+result = system.<span class="f">invert</span>(image, budget=<span class="n">120</span>, sparse=<span class="k">True</span>, stall=<span class="n">5</span>)   <span class="c"># fine-pitch sensors</span></code></pre>
+<p><code>invert</code> writes the likelihood of the observed image as an
+algebraic model — the same optics as <code>forward()</code>, term for term —
+and solves it with the installed Rekin package. There is no separate fitting
+code; the solver's answer is the result. <code>budget</code> is the solve
+time in seconds; <code>stall=N</code> additionally stops the solve after
+<code>N</code> seconds without improvement (every shipped example passes it —
+5 s, or 15 s on the hard three-source case). <code>keep_model=path</code>
+writes the emitted <code>.rn</code> file for inspection — every shipped
+example does. <code>sparse=True</code> selects the fired-pixel encoding,
+which is exact for fine-pitch sensors where the pixel is much smaller than
+the blur floor; the model then scales with the photon count rather than the
+pixel count. The fitted brightness is bounded to α ∈ [1, 300], the
+instrument's operating regime.</p>
+<table>
+  <tr><th>field</th><th>meaning</th></tr>
+  <tr><td><code>.position</code></td><td>recovered vertex (x, y, z), mm</td></tr>
+  <tr><td><code>.photons</code></td><td>fitted detected-photon count α</td></tr>
+  <tr><td><code>.status</code></td><td><code>delta-global</code> (proved
+      optimal), <code>local</code> (a verified local optimum), or
+      <code>best-effort</code> (the best point found in budget)</td></tr>
+  <tr><td><code>.truth</code></td><td>the true position, when supplied</td></tr>
+  <tr><td><code>.error</code></td><td>per-axis |error| — only when
+      <code>truth=</code> was given</td></tr>
+</table>
+
+<h2>Several vertices in one image</h2>
+<p>A Compton scatter deposits energy twice; both flashes reach the sensor
+together, so one image contains superposed light. The syntax is the same —
+add the vertices, ask for that many sources back:</p>
+<pre><code>s1 = system.<span class="f">addVertex</span>([<span class="n">5</span>, <span class="n">3</span>, <span class="n">30</span>], photons=<span class="n">200</span>)    <span class="c"># first flash</span>
+s2 = system.<span class="f">addVertex</span>([-<span class="n">6</span>, -<span class="n">2</span>, <span class="n">24</span>], photons=<span class="n">150</span>)  <span class="c"># second, dimmer flash</span>
+
+image = system.<span class="f">forward</span>([s1, s2], seed=<span class="n">3</span>)                  <span class="c"># light superposes</span>
+found = system.<span class="f">invert</span>(image, truth=[s1, s2], sources=<span class="n">2</span>)   <span class="c"># list back, brightest first</span></code></pre>
+<p>The emitted model contains one block of unknowns per source and a depth
+ordering (z₂ ≥ z₁) so that relabelling the sources does not count as a second
+optimum. All sources are solved jointly — the likelihood itself decides how
+to split the light. Each result is matched to its nearest true vertex for the
+error columns.</p>
+<div class="note">When separation is reliable: vertices well apart, both
+imaged by a decent share of the array, comparable brightness. It degrades
+when one source is much dimmer or sits in a poorly-imaged corner of the
+volume — the brighter fit absorbs its light. Check <code>visibility()</code>
+for each vertex first, and note that on a one-bit sensor positions are
+recovered much more tightly than per-source photon counts.</div>
+
+<h2>validate — check the answer independently</h2>
+<pre><code>v = system.<span class="f">validate</span>(found, image, truth=[((<span class="n">5</span>, <span class="n">3</span>, <span class="n">30</span>), <span class="n">200.0</span>)])   <span class="c"># independent numpy check</span>
+v[<span class="s">"model_rel_err"</span>]                <span class="c"># emitted model vs numpy optics, relative</span>
+v[<span class="s">"nll_solver"</span>], v[<span class="s">"nll_truth"</span>]   <span class="c"># NLL of the fit and of the truth</span>
+v[<span class="s">"beats_truth"</span>]                  <span class="c"># fit explains the image at least as well</span></code></pre>
+<p><code>validate</code> recomputes the likelihood of the recovered point
+through the numpy forward optics, with no solver code involved. It reports
+the solver's NLL, the numpy NLL, their relative difference (float round-off
+when the emitted model is faithful), the truth's NLL, and whether the
+recovered point explains the image at least as well as the truth does.</p>
+
+<footer><div class="wrap">
+  <a href="../manual.html">Manual home</a>
+  <a href="lens-model.html">Lens model →</a>
+</div></footer>
+</div></body></html>

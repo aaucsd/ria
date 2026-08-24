@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The sensor image — RIA</title>
+<link rel="stylesheet" href="style.css"></head><body>
+
+<header class="sub"><div class="wrap">
+  <nav class="crumb"><a href="../manual.html">← manual</a></nav>
+  <div class="tag">Reference</div>
+  <h1>What the image is</h1>
+  <p class="lede">The exact array the library produces and expects, how it is
+  formed, and how to supply your own detector data.</p>
+</div></header>
+
+<div class="wrap">
+
+<h2>Format in one line</h2>
+<p>A <code>(ny, nx)</code> NumPy array from
+<code>system.forward(...)</code> — the readout of a single-photon sensor in
+short-gate binary mode, each pixel <code>0</code> or <code>1</code>.
+<code>forward</code> raises if no lens images the point — a blank image is
+an error, not a measurement.</p>
+
+<pre><code>image = system.<span class="f">forward</span>(s1, seed=<span class="n">1</span>)   <span class="c"># binary, one bit per pixel</span>
+image.shape        <span class="c"># (ny, nx)  →  the addDetector(pixels=...) grid</span>
+image.<span class="f">sum</span>()        <span class="c"># pixels that fired</span></code></pre>
+
+<figure>
+  <img src="fig_measurement.png" alt="expected photon field, binary readout, reconstruction">
+  <figcaption>Left: the expected photon field — one blob per lens.
+  Middle: what the sensor actually returns, one bit per pixel; this is the
+  array <code>invert()</code> receives. Right: the reconstruction.</figcaption>
+</figure>
+
+<h2>How it is formed</h2>
+<ol>
+  <li>Each lens images the source to a Gaussian blob — centre from the chief
+      ray, width from defocus (see <a href="lens-model.html">the lens
+      model</a>).</li>
+  <li>Each blob is evaluated as a pixel-convolved density times the pixel
+      area: the per-axis variance is σ² + w²/12, where w is the pixel width.
+      Folding the pixel's second moment into the blur keeps sub-pixel blobs
+      from being aliased away, and keeps every operation inside the
+      exp/sqrt/ratio arithmetic the solver accepts (there is no error-function
+      integral anywhere in the model).</li>
+  <li>The summed profile is normalised so its total equals <code>photons</code>
+      — the detected count.</li>
+  <li>A dark-count floor <code>ε</code> is added.</li>
+  <li>Binary readout samples <code>Bernoulli(1 − e^{−λ})</code> per pixel,
+      with the explicit <code>seed</code>.</li>
+</ol>
+
+<h2>The photon count is the detected count</h2>
+<p><code>photons</code> is N<sub>γ</sub>, the number of photons that
+reach the sensor — the quantity an experimenter reads off — not the
+isotropic emission of the scintillation flash. The library normalises the
+underlying expected-count field (the left panel of the figure above) so it
+sums to exactly this value before the binary readout is sampled.</p>
+
+<h2>Fired pixels are not the photon count</h2>
+<p>A one-bit pixel saturates: it reports "at least one photon", however many
+arrived. The same 77-photon vertex on the same instrument fires</p>
+<table>
+  <tr><th>binning</th><th class="num">pixels fired</th><th>why</th></tr>
+  <tr><td>12×12</td><td class="num">14 / 144</td><td>many photons share the few pixels under each blob</td></tr>
+  <tr><td>24×24</td><td class="num">42 / 576</td><td>less sharing, still saturated near blob centres</td></tr>
+  <tr><td>6688×4760 (realistic 6.9 µm)</td><td class="num">88 / 32 M</td><td>one pixel per photon; saturation is gone</td></tr>
+</table>
+<p>So <code>image.sum()</code> under-counts at coarse binning, and the fitted
+<code>photons</code> from <code>invert()</code> is the better estimate of the
+detected count.</p>
+
+<h2>Binning decides identifiability</h2>
+<p>The choice of <code>pixels</code> is not cosmetic. Measured on the same
+77-photon vertex, whole-volume search, no initial guess:</p>
+<table>
+  <tr><th>binning</th><th class="num">3-D error</th></tr>
+  <tr><td>12×12</td><td class="num">20.8 mm</td></tr>
+  <tr><td>24×24</td><td class="num">0.93 mm</td></tr>
+  <tr><td>6688×4760, <code>invert(sparse=True)</code></td><td class="num">0.055 mm</td></tr>
+</table>
+<div class="note">At coarse binning the one-bit likelihood can genuinely
+prefer a wrong nearby source over the true one — the data do not contain
+enough structure to tell them apart. This is a property of the sensor, not of
+the solver; the fix is more pixels, not more solve time. At fine pitch the
+model contains only the fired pixels (the dark side of the likelihood is
+summed in closed form), so finer binning does not inflate the model — see
+<a href="solver-interface.html">how the image reaches the solver</a>.</div>
+
+<h2>Supplying your own data</h2>
+<p>Any 0/1 array works. Declare a detector whose <code>pixels</code> matches
+the array shape and whose <code>size</code> describes the same physical
+extent, then invert as usual:</p>
+<pre><code><span class="k">import</span> numpy <span class="k">as</span> np, ria                       <span class="c"># your data comes in as a numpy array</span>
+
+image  = np.<span class="f">load</span>(<span class="s">"event_0421.npy"</span>)            <span class="c"># (ny, nx) of 0/1 — a real measurement</span>
+system = ria.<span class="f">imager</span>()                         <span class="c"># then describe the instrument that took it</span>
+system.<span class="f">addScint</span>(size=(<span class="n">50</span>, <span class="n">50</span>, <span class="n">50</span>), working_distance=<span class="n">5.0</span>)   <span class="c"># volume mm, lens gap mm</span>
+system.<span class="f">addLens</span>(lenses=LENSES, blur_floor=<span class="n">0.12</span>)              <span class="c"># the real lens records</span>
+system.<span class="f">addDetector</span>(size=(<span class="n">46.15</span>, <span class="n">32.84</span>),       <span class="c"># the sensor's real extent, mm</span>
+                   pixels=(image.shape[<span class="n">1</span>], image.shape[<span class="n">0</span>]), <span class="c"># grid = the array's shape</span>
+                   imaging_distance=<span class="n">20.477</span>, dark_count=<span class="n">1e-9</span>)  <span class="c"># S* mm, background rate</span>
+event = system.<span class="f">invert</span>(image)                  <span class="c"># recover the vertex — no truth known</span></code></pre>
+
+<footer><div class="wrap">
+  <a href="../manual.html">Manual home</a>
+  <a href="lens-model.html">← Lens model</a>
+  <a href="solver-interface.html">How it reaches the solver →</a>
+</div></footer>
+</div></body></html>

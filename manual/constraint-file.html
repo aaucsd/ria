@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The constraint file — RIA</title>
+<link rel="stylesheet" href="style.css"></head><body>
+
+<header class="sub"><div class="wrap">
+  <nav class="crumb"><a href="../manual.html">← manual</a></nav>
+  <div class="tag">Reference</div>
+  <h1>How the constraint file is built</h1>
+  <p class="lede">The algebraic model handed to the solver, section by
+  section, as RIA emits it from a real event.</p>
+</div></header>
+
+<div class="wrap">
+
+<p>Every inversion is solved from a self-contained <code>.rn</code> file:
+variables with ranges, a chain of named definitions, the constraints, and the
+likelihood as the objective. <code>invert()</code> writes it to a temporary
+file by default; pass <code>keep_model="event.rn"</code> to keep it. Every
+shipped example does this, so after a run the exact file that was solved is in
+<code>examples/models/</code>. The file needs nothing else — you can re-solve
+it directly with the Rekin command line:</p>
+
+<pre><code>found = system.<span class="f">invert</span>(image, truth=s1, budget=<span class="n">90</span>, stall=<span class="n">5</span>,  <span class="c"># a normal inversion</span>
+                      keep_model=<span class="s">"event.rn"</span>)                <span class="c"># ...but keep the emitted model</span>
+<span class="c"># later, or on another machine:</span>
+<span class="c">#   rekin event.rn --budget 60</span></code></pre>
+
+<p>There are two encodings — COMPACT (the default, examples 1 and 3) and
+SPARSE (<code>sparse=True</code>, the fine-pitch examples 2, 4 and 5). Both
+sum the dark pixels in closed form so only fired pixels appear individually;
+they differ in how the full-sensor pattern mass is written. This page walks
+through example 1's emitted COMPACT model; the section at the end shows what
+changes under SPARSE.</p>
+
+<h2>1 · Variables</h2>
+<p>The decision variables are exactly the physical unknowns — four per
+source, nothing else (every derived quantity is a parse-time macro):</p>
+<pre><code><span class="c"># Exact inversion model (ria.model_export), COMPACT encoding:</span>
+<span class="c"># 1 source(s) x (x,y,z,alpha), 14 fired of 144 pixels,</span>
+<span class="c"># 37 lenses.  The dark-pixel NLL is summed in closed form (it</span>
+<span class="c"># is linear in lam) and the grid normaliser S_j separates into</span>
+<span class="c"># per-lens row x column sums, so only fired pixels appear</span>
+<span class="c"># individually.</span>
+<span class="k">Variables</span>:                   <span class="c"># the decision variables and their boxes</span>
+  <span class="k">Real</span> x0 : [-<span class="n">25</span>, <span class="n">25</span>]        <span class="c"># source x — box = the whole scintillator, mm</span>
+  <span class="k">Real</span> y0 : [-<span class="n">25</span>, <span class="n">25</span>]        <span class="c"># source y, mm</span>
+  <span class="k">Real</span> z0 : [<span class="n">1e-06</span>, <span class="n">50</span>]      <span class="c"># source depth, mm</span>
+  <span class="k">Real</span> alpha0 : [<span class="n">1</span>, <span class="n">300</span>]     <span class="c"># detected photons — the instrument's regime</span></code></pre>
+<p>The position boxes are the scintillator volume as declared in
+<code>addScint</code> — the search is the whole volume, with no starting
+guess. <code>alpha</code> is the expected detected photon count; its range
+[1, 300] states the instrument's operating regime (on the order of a hundred
+detected photons per event), which is given information about the detector,
+not part of the answer. With several sources the block repeats:
+<code>x1, y1, z1, alpha1</code>, and so on.</p>
+
+<h2>2 · The forward model, as macros</h2>
+<p>Everything between the variables and the constraints is a chain of
+<code>Define name := expression</code> lines. These are parse-time macros: each
+later occurrence of the name is replaced by the parenthesised expression before
+the model is parsed. No auxiliary variables are created — the solver sees a
+closed-form objective over the four unknowns — but the file reads as the
+physics, one named quantity per line, and each expression is written once
+rather than duplicated into every pixel term.</p>
+
+<p>The chain, in order. Object distance:</p>
+<pre><code><span class="k">Define</span> u0 := (z0 + <span class="n">5</span>)        <span class="c"># object distance: depth + working distance, mm</span></code></pre>
+
+<p>Per-lens defocus blur at that distance — the thin-lens formula with the
+absolute value smoothed as <code>sqrt(t² + 1e-12)</code>, plus the blur floor;
+squared, because everything downstream needs the variance:</p>
+<pre><code><span class="k">Define</span> s2_0_0 := ((<span class="n">0.75</span> * <span class="f">sqrt</span>((<span class="n">20.477</span>*(u0 - <span class="n">6</span>)/(<span class="n">6</span>*u0) - <span class="n">1</span>)^<span class="n">2</span> + <span class="n">1e-12</span>) + <span class="n">0.12</span>))^<span class="n">2</span>   <span class="c"># lens 0 blur variance at u0</span></code></pre>
+
+<p>Per-axis blob variance (the pixel's own second moment w²/12 folded in),
+the chief-ray blob centre, and the amplitude:</p>
+<pre><code><span class="k">Define</span> vx_0_0 := (s2_0_0 + <span class="n">1.232536169</span>)                       <span class="c"># blob variance + pixel w^2/12</span>
+<span class="k">Define</span> cx_0_0 := (<span class="n">0</span> + (<span class="n">20.477</span>/u0)*(x0 - <span class="n">0</span>))                   <span class="c"># chief-ray blob centre, x</span>
+<span class="k">Define</span> g_0_0  := (<span class="n">2.25</span>/(<span class="n">6.283185307</span>*<span class="f">sqrt</span>(vx_0_0*vy_0_0)*u0*u0))   <span class="c"># amplitude: solid angle / 2*pi*sigma</span></code></pre>
+
+<p>The pattern at a pixel — pixel area times the sum over lenses of a Gaussian
+density evaluated at the pixel centre. One such line per FIRED pixel only
+(14 here); the pixel coordinates are the constants:</p>
+<pre><code><span class="k">Define</span> pat_0_0 := (<span class="n">10.52476389</span>*(g_0_0*<span class="f">exp</span>(-((-<span class="n">21.15208333</span> - cx_0_0)^<span class="n">2</span>/(<span class="n">2</span>*vx_0_0)   <span class="c"># pixel area * sum over</span>
+                   + (-<span class="n">15.05166667</span> - cy_0_0)^<span class="n">2</span>/(<span class="n">2</span>*vy_0_0))) + g_0_1*<span class="f">exp</span>(- ... )))  <span class="c"># lenses of blob density</span></code></pre>
+
+<p>The full-grid pattern mass <code>S0</code> never sums 144 pixel terms:
+each lens's grid sum separates into a (row sum) × (column sum) product, one
+<code>sx</code>/<code>sy</code> pair per lens, and <code>F0</code> collects
+the fired-pixel mass:</p>
+<pre><code><span class="k">Define</span> sx_0_0 := (<span class="f">exp</span>(-(-<span class="n">21.15208333</span> - cx_0_0)^<span class="n">2</span>/(<span class="n">2</span>*vx_0_0)) + ... )   <span class="c"># lens 0: 12 column terms</span>
+<span class="k">Define</span> sy_0_0 := (<span class="f">exp</span>(-(-<span class="n">15.05166667</span> - cy_0_0)^<span class="n">2</span>/(<span class="n">2</span>*vy_0_0)) + ... )   <span class="c"># lens 0: 12 row terms</span>
+<span class="k">Define</span> S0 := (<span class="n">10.52476389</span>*(g_0_0*sx_0_0*sy_0_0 + g_0_1*sx_0_1*sy_0_1 + ... ))   <span class="c"># full-grid mass: row x column per lens</span>
+<span class="k">Define</span> F0 := (pat_0_0 + pat_0_1 + ... + pat_0_13)                      <span class="c"># mass on the 14 fired pixels</span></code></pre>
+
+<p>And the expected rate per fired pixel — dark floor plus the normalised
+pattern scaled by the photon count, summed over sources when there are
+several:</p>
+<pre><code><span class="k">Define</span> lam_0 := (<span class="n">1e-09</span> + alpha0*pat_0_0/S0)   <span class="c"># rate at fired pixel 0: dark floor + normalised pattern</span></code></pre>
+
+<p>All constants are written with 10 significant digits, so the emitted model
+agrees with the numpy forward optics to float round-off. There is no
+approximation between simulation and inversion; the two are the same
+expressions.</p>
+
+<h2>3 · Constraints</h2>
+<p>A single-source COMPACT model has NO constraints — <code>S0</code> is a
+macro, not a variable, so nothing needs enforcing. With more than one source
+there is one ordering row per adjacent pair, so that relabelling the sources
+does not count as a second optimum (this is the whole Constraints section of
+example 3's two-source model):</p>
+<pre><code><span class="k">Constraints</span>:                 <span class="c"># (empty for one source — S is a macro, not a variable)</span>
+  <span class="c"># break the source-label symmetry</span>
+  z1 - z0 &gt;= <span class="n">0</span> ~ <span class="n">1e-6</span>        <span class="c"># deeper source is source 1, tolerance 1e-6</span></code></pre>
+
+<h2>4 · The objective</h2>
+<p>The Bernoulli negative log-likelihood of the observed image. The dark
+pixels' sum is closed-form — the NLL is linear in <code>lam</code> there —
+so the objective is the collapsed dark term plus one
+<code>−log(1 − e^−lam + 1e-9)</code> per fired pixel. This objective line is
+the only place the measurement enters the file:</p>
+<pre><code><span class="k">Minimize</span>:                    <span class="c"># the objective — the only place the image enters</span>
+  <span class="c"># Bernoulli NLL; the dark sum is closed-form:</span>
+  <span class="c"># sum_dark lam = sum_j alpha_j (1 - F_j/S_j) + m_dark*eps, m_dark = 130</span>
+  alpha0*(<span class="n">1</span> - F0/S0) + <span class="n">1.3e-07</span> - <span class="f">log</span>(<span class="n">1</span> - <span class="f">exp</span>(-lam_0) + <span class="n">1e-9</span>) - ... ~ <span class="n">1e-3</span>   <span class="c"># dark term + one -log(p) per fired pixel</span></code></pre>
+
+<h2>5 · The sparse (fired-pixel) encoding</h2>
+<p>At realistic-scale pitch (examples 2, 4, 5) the grid has 32 M pixels, and even
+the row × column sums of COMPACT would be enormous. <code>sparse=True</code>
+changes exactly one thing: at fine pitch the full-sensor mass <code>S</code>
+has a closed form — each lens blob is a normalised Gaussian whose density
+integrates to 1, so the blur cancels and only the geometric weight
+survives:</p>
+<pre><code><span class="c"># SPARSE fired-pixel encoding: 1 source(s) x (x,y,z,alpha),</span>
+<span class="c"># 88 fired of 31834880 pixels, 37 lenses.</span>
+<span class="k">Define</span> S0 := (<span class="n">2.25</span>/(u0*u0) + <span class="n">2.25</span>/(u0*u0) + ... )       <span class="c"># analytic mass: sum_i a_i^2/u^2</span>
+<span class="k">Define</span> F0 := (pat_0_0 + pat_0_1 + ... + pat_0_87)       <span class="c"># mass on the 88 fired pixels</span>
+
+<span class="k">Minimize</span>:                                               <span class="c"># same objective shape as COMPACT</span>
+  <span class="c"># sum_dark lam = sum_j alpha_j (1 - F_j/S_j) + m_dark*eps, m_dark = 31834792</span>
+  alpha0*(<span class="n">1</span> - F0/S0) + <span class="n">0.031834792</span> - <span class="f">log</span>(<span class="n">1</span> - <span class="f">exp</span>(-lam_0) + <span class="n">1e-9</span>) - ... ~ <span class="n">1e-3</span>   <span class="c"># 32M dark pixels in one term</span></code></pre>
+<p>Validity conditions, stated in the emitter's docstring: every blob must lie
+on the sensor (check <code>system.visibility</code> at plausible source
+positions), and the pixel must be small against the blur floor (at 6.9 µm
+against a 120 µm floor the tail-truncation error is around 1e-10). Under
+those conditions the sparse objective equals the COMPACT one term for term.
+At coarse binnings the grid itself aliases the pattern mass and the
+closed-form <code>S</code> no longer matches the grid sum — which is why
+COMPACT remains the default and <code>sparse=True</code> is an explicit
+choice.</p>
+
+<h2>Reading the tolerances</h2>
+<p>The <code>~ tol</code> on each line is a declared tolerance: the line
+counts as satisfied within that band (1e-6 on the source-ordering row, 1e-3
+on the objective). A returned point can sit anywhere inside the bands, so the
+objective value the solver reports can differ slightly from the exact
+likelihood at the same point. <code>validate()</code> recomputes the
+likelihood through the numpy optics, independently of the solver, and reports
+the relative model error — typically around 1e-5.</p>
+
+<h2>File size</h2>
+<p>Both encodings scale with the fired pixels, not the grid. Example 1's
+COMPACT 12×12 single-source model is 353 lines (14 fired pixels plus one
+row-sum and one column-sum macro per lens); example 3's two-source 24×24
+model is 829. The SPARSE 32-Mpixel single-source model of example 2 is 426
+lines — smaller than the two-source coarse file, because at most one pixel
+fires per detected photon.</p>
+
+<footer><div class="wrap">
+  <a href="../manual.html">Manual home</a>
+  <a href="solver-interface.html">← How it reaches the solver</a>
+</div></footer>
+</div></body></html>

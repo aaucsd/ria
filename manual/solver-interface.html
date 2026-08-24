@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>From image to solver — RIA</title>
+<link rel="stylesheet" href="style.css"></head><body>
+
+<header class="sub"><div class="wrap">
+  <nav class="crumb"><a href="../manual.html">← manual</a></nav>
+  <div class="tag">Reference</div>
+  <h1>How the image reaches the solver</h1>
+  <p class="lede">What happens between <code>invert(image)</code> and the
+  result you get back.</p>
+</div></header>
+
+<div class="wrap">
+
+<h2>The pipeline</h2>
+<pre><code>image ──▶ exact algebraic model (.rn) ──▶ rekin.solve() ──▶ Inversion
+(nx×ny)   same expressions as forward      installed rekin    status: delta-global /
+          10-significant-digit constants   package            local / best-effort</code></pre>
+
+<p><code>invert()</code> writes the likelihood of the measured image as a
+plain-text model file and hands it to the installed rekin package
+(<code>from rekin import solve</code>). There is no grid search and no
+separate fitting code; the solver's answer, together with its status, is
+the result. Passing <code>keep_model=path</code> writes the emitted model
+to that path — every shipped example does this, so after a run the exact
+file the solver worked on is in <code>examples/models/</code> and can be
+re-solved directly with <code>rekin &lt;model&gt;.rn</code>.</p>
+
+<h2>1 · One model, both directions</h2>
+<p>The forward simulation and the inverse likelihood are the same
+analytic function. A source at <code>(x,y,z)</code> with
+<code>alpha</code> detected photons gives per-pixel rates
+<code>lam = eps + alpha·P(u,v)</code> with <code>ΣP = 1</code>;
+each pixel fires with probability <code>1 − e<sup>−lam</sup></code>.
+<code>P</code> is chief-ray optics: per-lens Gaussian blobs with the pixel's own
+second moment (<code>w²/12</code>) folded into the variance, evaluated as
+density × area — deliberately <em>exp/sqrt/ratio</em> arithmetic only, so the
+solver's language expresses it exactly. There are no error functions, no
+lookup tables, and no approximation between forward and inverse.</p>
+
+<h2>2 · The model</h2>
+<p>The decision variables are exactly the physical unknowns:
+<code>(x_j, y_j, z_j, alpha_j)</code> per source. Positions carry the
+whole scintillator volume as their box; <code>alpha</code> is bounded to
+[1, 300], the instrument's operating regime (a few
+hundred detected photons) — given data about the source class, not a fit
+parameter. For more than one source, ordering constraints
+<code>z_{j+1} ≥ z_j</code> remove the label symmetry, and the rates
+superpose before the Bernoulli readout.</p>
+<p>The forward chain — object distance <code>u</code>, per-lens defocus
+blur, blob centres, per-pixel pattern, rate <code>lam</code>, Bernoulli
+NLL — is written as parse-time macros
+(<code>Define name := expression</code>), so the file reads as the physics
+while the solver sees one closed-form objective over the 4·K unknowns.
+Constants are written to 10 significant digits; the emitted expressions
+are identical, term for term, to the numpy forward model. The
+<a href="constraint-file.html">constraint file page</a> walks through a
+complete emitted model.</p>
+
+<h2>3 · Two encodings</h2>
+<p>Both encodings write the Bernoulli NLL with the dark-pixel sum collapsed
+in closed form — the NLL is linear in <code>lam</code> on dark pixels — to
+<code>alpha_j·(1 − F_j/S_j) + m_dark·eps</code>, where <code>F_j</code> is
+the pattern mass on the fired pixels. Only fired pixels appear individually
+in the file; the encodings differ in how the full-sensor mass
+<code>S_j</code> is written.</p>
+<p>COMPACT (the default — examples 1 and 3): <code>S_j</code> is the pattern
+summed over the actual pixel grid, with each lens's grid sum separated into
+(row sum) × (column sum) macros. Exact at any binning, including coarse
+12×12 and 24×24 grids.</p>
+<p>SPARSE (<code>invert(sparse=True)</code>, fine-pitch sensors — examples
+2, 4 and 5): at fine pitch the full-sensor mass is analytic,
+<code>S_j = Σ_i a_i²/u_j²</code>, because each lens blob is a normalised
+Gaussian whose blur cancels on integration. The file then scales with the
+photon budget rather than the pixel count — a 32-Mpixel sensor emits a
+smaller file than a 12×12 one. The closed form is valid when pixels are
+much smaller than the blur floor and every blob lies on the sensor; at
+coarse binnings the pixel grid itself deviates from the continuous mass,
+which is why COMPACT is the default and <code>sparse=True</code> is an
+explicit choice.</p>
+
+<h2>4 · Status</h2>
+<p>The solver reports one of three statuses, and the library passes it
+through unchanged:</p>
+<table>
+  <tr><th>status</th><th>meaning</th></tr>
+  <tr><td><code>delta-global</code></td><td>global optimality proved to the stated tolerance</td></tr>
+  <tr><td><code>local</code></td><td>a certified local optimum</td></tr>
+  <tr><td><code>best-effort</code></td><td>the best point found; no certificate</td></tr>
+</table>
+<p>A status is never rounded up. In the shipped examples the imaging
+inversions return <code>local</code> (or <code>best-effort</code> on the
+three-source frontier of example 5); the design solves of example 6 return
+<code>local</code> and <code>best-effort</code>.</p>
+
+<h2>5 · Checking the answer: validate()</h2>
+<pre><code>v = system.<span class="f">validate</span>(inversion, image, truth=[(position, photons)])   <span class="c"># independent numpy check</span>
+v[<span class="s">"model_rel_err"</span>]   <span class="c"># emitted model vs numpy forward optics (~1e-5)</span>
+v[<span class="s">"nll_solver"</span>], v[<span class="s">"nll_truth"</span>], v[<span class="s">"beats_truth"</span>]   <span class="c"># fit NLL, truth NLL, fit at least as good?</span></code></pre>
+<p><code>validate()</code> recomputes the model's NLL through the numpy
+forward optics, with no solver code involved. A small
+<code>model_rel_err</code> confirms the emitted model matches the forward
+simulation to float round-off. Comparing <code>nll_solver</code> against
+<code>nll_truth</code> shows whether the recovered configuration explains
+the image at least as well as the ground truth does. At coarse binnings
+it genuinely can while being far from the truth — a saturating one-bit
+sensor at low resolution does not always identify the source. That is a
+property of the measurement, not of the solver, and it is visible: the
+recovered point has the lower NLL.</p>
+
+<h2>What you get back</h2>
+<table>
+  <tr><th>field</th><th>type</th><th>meaning</th></tr>
+  <tr><td><code>.position</code></td><td>tuple(3)</td><td>vertex (x, y, z), mm</td></tr>
+  <tr><td><code>.photons</code></td><td>float</td><td>fitted detected-photon count (alpha)</td></tr>
+  <tr><td><code>.status</code></td><td>str</td><td>delta-global / local / best-effort</td></tr>
+  <tr><td><code>.truth</code></td><td>tuple(3)</td><td>the matched true vertex, when supplied</td></tr>
+  <tr><td><code>.error</code></td><td>tuple(3)</td><td>per-axis |error|, when a truth was supplied</td></tr>
+</table>
+<p>For <code>sources=1</code> a single <code>Inversion</code> is returned;
+for more, a list sorted brightest first, each entry matched to its nearest
+true vertex when truths are given.</p>
+
+<footer><div class="wrap">
+  <a href="../manual.html">Manual home</a>
+  <a href="sensor-image.html">← The sensor image</a>
+  <a href="constraint-file.html">The constraint file →</a>
+</div></footer>
+</div></body></html>

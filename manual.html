@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RIA — plenoptic interaction localization</title>
+<link rel="stylesheet" href="manual/style.css">
+</head>
+<body>
+
+<header><div class="wrap">
+  <div class="tag">Plenoptic radiation imaging</div>
+  <h1>Radiation Image Analyzer</h1>
+  <p class="lede">Locate a radiation interaction from a single-photon image,
+  and design the lens array that makes it possible.</p>
+</div></header>
+
+<div class="wrap">
+
+<h2>What it does</h2>
+<p>A scintillator turns a particle interaction into a flash of light. A lens
+array in front of a single-photon sensor turns that flash into a pattern of
+blobs. Where the blobs land encodes where the interaction happened —
+including its depth, which a plain camera cannot see. RIA runs both
+directions of that map.</p>
+
+<div class="grid">
+  <div class="card">
+    <h3>Measurement</h3>
+    <p>You have a sensor image; you want the interaction vertex
+    <code>(x, y, z)</code> and its photon count, together with the solver's
+    statement of how well-determined the fit is.</p>
+  </div>
+  <div class="card">
+    <h3>Design</h3>
+    <p>You have a lens array; you want to know how precisely it could ever
+    locate a source, and which focal lengths would do better.</p>
+  </div>
+</div>
+
+<pre><code><span class="k">import</span> ria                                       <span class="c"># the RIA package</span>
+
+system = ria.<span class="f">imager</span>()                            <span class="c"># an empty imager</span>
+system.<span class="f">addScint</span>(size=(<span class="n">30</span>, <span class="n">30</span>, <span class="n">40</span>),               <span class="c"># scintillator volume (x, y, z), mm</span>
+                working_distance=<span class="n">5.0</span>)            <span class="c"># lens plane -&gt; front face, mm</span>
+system.<span class="f">addLens</span>(lenses=[{<span class="s">"position"</span>: (<span class="n">0.0</span>, <span class="n">0.0</span>),  <span class="c"># lens centre on the lens plane, mm</span>
+                        <span class="s">"f"</span>: <span class="n">9.0</span>,                <span class="c"># focal length, mm</span>
+                        <span class="s">"aperture"</span>: <span class="n">1.5</span>}],       <span class="c"># lens radius, mm</span>
+               blur_floor=<span class="n">0.12</span>)                  <span class="c"># residual blur every blob carries, mm</span>
+system.<span class="f">addDetector</span>(size=(<span class="n">46.15</span>, <span class="n">32.84</span>),          <span class="c"># sensor active area, mm</span>
+                   pixels=(<span class="n">24</span>, <span class="n">24</span>),              <span class="c"># one-bit pixels across that area</span>
+                   imaging_distance=<span class="n">20.477</span>,      <span class="c"># lens plane -&gt; sensor, mm</span>
+                   dark_count=<span class="n">1e-9</span>)              <span class="c"># per-pixel background rate</span>
+
+s1    = system.<span class="f">addVertex</span>([<span class="n">2</span>, <span class="n">2</span>, <span class="n">20</span>], photons=<span class="n">80</span>) <span class="c"># a flash: position mm, detected photons</span>
+image = system.<span class="f">forward</span>(s1, seed=<span class="n">1</span>)               <span class="c"># the binary sensor image</span>
+result = system.<span class="f">invert</span>(image, truth=s1,          <span class="c"># recover the vertex from the image</span>
+                       budget=<span class="n">30</span>, stall=<span class="n">5</span>)       <span class="c"># solve &lt;= 30 s, stop after 5 s no gain</span></code></pre>
+
+<p><code>photons</code> is the detected count — the number your sensor
+actually registers — not the isotropic emission. Every parameter above is
+explicit; nothing about the geometry is assumed. The full walk-through of
+these calls is <a href="manual/system-api.html">Building a system</a>; the
+quick-start script is <code>examples/0_quick_start.py</code>.</p>
+
+<h2>Reference</h2>
+<p>How every piece is defined, for anyone who needs the details rather than
+the quick start.</p>
+
+<div class="grid">
+  <a class="card" href="manual/system-api.html">
+    <h3>Building a system →</h3>
+    <p>The <code>imager()</code> workflow end to end: addScint, addLens,
+    addDetector, addVertex, visibility, forward, invert and validate.</p>
+  </a>
+  <a class="card" href="manual/lens-model.html">
+    <h3>Lens model →</h3>
+    <p>How lens positions, focal lengths and blur are defined; the chief-ray
+    map; the fixed system constants; the fidelity limits of the model.</p>
+  </a>
+  <a class="card" href="manual/sensor-image.html">
+    <h3>The sensor image →</h3>
+    <p>The exact array format, how it is formed, why the photon count is the
+    detected count, saturation, and supplying your own data.</p>
+  </a>
+  <a class="card" href="manual/solver-interface.html">
+    <h3>Image → solver →</h3>
+    <p>How the likelihood is emitted as an algebraic model and solved by the
+    installed rekin package; dense and sparse encodings; result statuses.</p>
+  </a>
+  <a class="card" href="manual/constraint-file.html">
+    <h3>The constraint file →</h3>
+    <p>The full algebraic model handed to the solver — variables, macros,
+    constraints and the objective — from real events.</p>
+  </a>
+</div>
+
+<h2>Examples</h2>
+<p>Each example in <code>examples/</code> is a standalone script that prints
+a narrated report and writes the exact <code>.rn</code> model it solved into
+<code>examples/models/</code>. In brief:</p>
+
+<div class="ex">
+  <div class="ex-head">
+    <h3>0 &middot; Quick start</h3>
+    <div class="src"><code>0_quick_start.py</code></div>
+  </div>
+  <div class="ex-body">
+    <p>One lens, one vertex, the whole pipeline. A single lens sees depth
+    only through its own blur, so the inversion comes back about 2.6 mm off,
+    almost all of it in depth — which is exactly what the array in the later
+    examples fixes.</p>
+    <figure>
+      <img src="manual/fig_measurement.png" alt="Expected photon field, binary readout, and the reconstructed vertex">
+      <figcaption>Left: the expected photon field, one blob per lens.
+      Middle: what the sensor returns, one bit per pixel — this is what
+      <code>invert()</code> receives. Right: the reconstruction against the
+      truth.</figcaption>
+    </figure>
+  </div>
+</div>
+
+<div class="ex">
+  <div class="ex-head">
+    <h3>1–2 &middot; One source: coarse vs realistic-scale pitch</h3>
+    <div class="src"><code>1_single_source_coarse.py</code>,
+      <code>2_single_source_realistic_scale.py</code></div>
+  </div>
+  <div class="ex-body">
+    <p>The same source and the same 77 photons on a 37-lens array, at two
+    sensor binnings. On a coarse 12×12 sensor the reconstruction lands about
+    20 mm off, and <code>validate()</code> shows this is not a solver
+    failure: the recovered point explains the image at least as well as the
+    truth, so the 144-pixel one-bit image is genuinely ambiguous. On a
+    realistic sensor's 6688×4760 pixels at 6.9 µm pitch the sensor stops
+    saturating and the same source is recovered to about 0.05 mm. Only the
+    fired pixels enter the model, so its size scales with the photon budget,
+    not the pixel count.</p>
+  </div>
+</div>
+
+<div class="ex">
+  <div class="ex-head">
+    <h3>3–5 &middot; Several sources</h3>
+    <div class="src"><code>3_two_sources_coarse.py</code>,
+      <code>4_two_sources_realistic_scale.py</code>,
+      <code>5_three_sources_realistic_scale.py</code></div>
+  </div>
+  <div class="ex-body">
+    <p>A Compton scatter deposits energy more than once and the light
+    superposes; the model gets one block of unknowns per source. At a 24×24
+    binning two sources show the impostor failure that a single source has
+    already outgrown at that resolution — one source is recovered, the other
+    replaced by a nearer, brighter impostor that rides the brightness cap, so
+    multi-source needs more resolution than one source does. At realistic-scale
+    pitch both are located to about a millimetre. Three sources at realistic-scale
+    pitch is the current frontier: the physics is favourable, but the
+    twelve-variable joint search is strongly multimodal and returns a
+    best-effort incumbent within the budget rather than a certified optimum —
+    an optimisation limit, not an information one.</p>
+  </div>
+</div>
+
+<div class="ex">
+  <div class="ex-head">
+    <h3>6 &middot; The design side</h3>
+    <div class="src"><code>6_lens_design.py</code></div>
+  </div>
+  <div class="ex-body">
+    <p>Choosing the focal lengths rather than locating a source. The
+    Cramér–Rao bound maps the best possible depth precision at every point of
+    the working volume; the example then optimises the focal lengths against
+    it. The mean-precision design matches an independent coordinate sweep;
+    the minimax design — minimise the worst log CRB anywhere — is a query the
+    sweep cannot even pose, and improves worst-case precision 2.3× over the
+    starting array. Both designs are cross-checked against an independent
+    numpy Fisher implementation.</p>
+    <figure>
+      <img src="manual/fig_crb.png" alt="Cramér–Rao bound on depth across the working volume">
+      <figcaption>The depth-precision floor across the volume. Dashes mark
+      points where every blob falls off the sensor: depth is not observable
+      there at any brightness.</figcaption>
+    </figure>
+  </div>
+</div>
+
+<h2 id="performance">Measured accuracy</h2>
+<p>The same 37-lens instrument, cold start over the full volume, as run by
+the shipped examples:</p>
+
+<table>
+  <tr><th>example</th><th class="num">sources</th><th>binning</th><th>3-D error</th></tr>
+  <tr><td>1</td><td class="num">1</td><td>12 × 12</td><td>~20 mm (information-limited)</td></tr>
+  <tr><td>2</td><td class="num">1</td><td>realistic 6.9 µm</td><td>~0.05 mm</td></tr>
+  <tr><td>3</td><td class="num">2</td><td>24 × 24</td><td>one ~3 mm, one lost to an impostor</td></tr>
+  <tr><td>4</td><td class="num">2</td><td>realistic 6.9 µm</td><td>both ~0.1&ndash;1.5 mm</td></tr>
+  <tr><td>5</td><td class="num">3</td><td>realistic 6.9 µm</td><td>best-effort</td></tr>
+</table>
+
+<p>The coarse-binning error is a property of the sensor, not of the solver:
+a one-bit pixel saturates, and with few fired pixels a nearer source can
+genuinely explain the image better than the true one. Finer binning restores
+identifiability up to two sources; three sources is limited instead by the
+global search, not the sensor.</p>
+
+<div class="note">
+<p>The CRB and the inversion assume different sensors. The design side's
+Cramér–Rao bound assumes Poisson photon counting; the actual readout — and
+<code>forward()</code> — is binary one-bit. The CRB figures are the floor
+for a counting sensor and are not attainable by a binary one, so the two
+should not be compared directly.</p>
+</div>
+
+<h2>Result statuses</h2>
+<p>Every inversion and design solve reports the solver's own status:
+<code>delta-global</code> means global optimality was proved,
+<code>local</code> means a certified local optimum, and
+<code>best-effort</code> means the best point found in the budget, with no
+certificate. The status is never rounded up. In the shipped examples the
+imaging inversions return <code>local</code> (or <code>best-effort</code> on
+the three-source frontier of example 5); the design solves of example 6
+return <code>local</code> and <code>best-effort</code>. Independently of the solver,
+<code>validate()</code> recomputes the likelihood through the numpy forward
+optics and reports whether the fit explains the image at least as well as
+the truth.</p>
+
+<h2>Model fidelity</h2>
+<p>The optics are the paraxial chief-ray approximation: each lens paints a
+circular Gaussian blob whose centre carries the depth (through the
+magnification <code>S*/u</code>) and whose width carries the defocus. This
+is exact on-axis but draws a circle where a real lens draws an ellipse
+off-axis, and it over-trusts shallow-depth focus. For design studies that is
+the right trade — closed form, millions of evaluations; for final numbers,
+calibrate against measurement.</p>
+<p>Each blob is evaluated as a pixel-convolved density — the pixel's own
+second moment <code>w²/12</code> is folded into the blob variance — so the
+sub-pixel spots a plenoptic array produces are not aliased away, and the
+identical expression is emitted to the solver, keeping forward and inverse
+models the same term for term.</p>
+
+<footer><div>
+  <p><a href="manual/system-api.html">Building a system</a>
+     <a href="manual/lens-model.html">Lens model</a>
+     <a href="manual/sensor-image.html">Sensor image</a>
+     <a href="manual/solver-interface.html">Image → solver</a>
+     <a href="manual/constraint-file.html">Constraint file</a></p>
+</div></footer>
+
+</div>
+</body>
+</html>

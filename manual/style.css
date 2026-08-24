@@ -1,0 +1,61 @@
+:root{
+  --ink:#16202b; --muted:#5b6b7c; --line:#e2e8ef; --bg:#ffffff;
+  --soft:#f6f9fc; --accent:#2f6f9f; --warm:#c1553b; --code:#0f1720;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+     font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+     -webkit-font-smoothing:antialiased}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+header{background:linear-gradient(180deg,#f7fbff 0%,#ffffff 100%);
+       border-bottom:1px solid var(--line);padding:64px 0 48px}
+header.sub{padding:44px 0 30px}
+h1{margin:0 0 12px;font-size:2.6rem;letter-spacing:-.02em;font-weight:650}
+header.sub h1{font-size:2rem}
+.tag{display:inline-block;font-size:.76rem;letter-spacing:.09em;text-transform:uppercase;
+     color:var(--accent);font-weight:650;margin-bottom:14px}
+.lede{font-size:1.16rem;color:var(--muted);max-width:680px;margin:0}
+h2{font-size:1.5rem;letter-spacing:-.01em;margin:52px 0 14px;font-weight:640}
+h3{font-size:1.06rem;margin:30px 0 8px;font-weight:640}
+p{margin:0 0 14px}
+a{color:var(--accent)}
+ul,ol{margin:0 0 14px;padding-left:22px} li{margin:5px 0}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em;
+     background:var(--soft);padding:.12em .38em;border-radius:4px}
+pre{background:var(--code);color:#e8eef5;padding:18px 20px;border-radius:10px;
+    overflow-x:auto;font-size:.84rem;line-height:1.55}
+pre code{background:none;padding:0;color:inherit}
+table{border-collapse:collapse;width:100%;margin:16px 0;font-size:.94rem}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);
+      vertical-align:top}
+th{font-weight:640;color:var(--muted);font-size:.8rem;letter-spacing:.05em;
+   text-transform:uppercase}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+figure{margin:22px 0}
+figure img{width:100%;border:1px solid var(--line);border-radius:10px;display:block}
+figcaption{color:var(--muted);font-size:.87rem;margin-top:9px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.card{border:1px solid var(--line);border-radius:12px;padding:20px 22px;background:#fff}
+.card h3{margin-top:0} .card p{margin-bottom:0;color:var(--muted);font-size:.94rem}
+a.card{text-decoration:none;color:inherit;display:block;transition:.15s}
+a.card:hover{border-color:var(--accent);box-shadow:0 2px 14px rgba(47,111,159,.09)}
+a.card h3{color:var(--accent)}
+.note{border-left:3px solid var(--warm);background:#fdf7f5;padding:14px 18px;
+      border-radius:0 8px 8px 0;margin:18px 0;font-size:.95rem}
+.note strong{color:var(--warm)}
+.ex{border:1px solid var(--line);border-radius:12px;margin:22px 0;overflow:hidden}
+.ex-head{background:var(--soft);padding:14px 22px;border-bottom:1px solid var(--line)}
+.ex-head h3{margin:0} .ex-head .src{color:var(--muted);font-size:.85rem}
+.ex-body{padding:20px 22px}
+nav.crumb{font-size:.9rem;color:var(--muted);padding:16px 0 0}
+nav.crumb a{text-decoration:none}
+footer{border-top:1px solid var(--line);margin-top:64px;padding:28px 0 56px;
+       color:var(--muted);font-size:.9rem}
+footer a{margin-right:16px}
+@media(max-width:720px){.grid{grid-template-columns:1fr}h1{font-size:2rem}}
+/* code-token highlighting (python-ish), dark pre background */
+pre .k{color:#7fb4e0;font-weight:600}   /* keywords: import, for, Define, Real ... */
+pre .s{color:#9ecb87}                    /* strings */
+pre .n{color:#d8a35f}                    /* numbers */
+pre .f{color:#e8d07a}                    /* call names */
+pre .c{color:#6f8194;font-style:italic}  /* comments */
